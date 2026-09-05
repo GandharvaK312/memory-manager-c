@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdio.h>
 
 #define HEAP_CAP 640000 // size of the heap: 640 Kilo Bytes
