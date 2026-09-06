@@ -8,41 +8,55 @@ Following along with tsoding's implementation as the primary reference.
 
 ## How it works
 
-Memory is served from a single fixed-size static buffer (`heap[HEAP_CAP]`)
-using a **bump allocator**: `heap_size` is a boundary that only ever moves
-forward, and each allocation just returns `heap + heap_size` before
-advancing it.
+Memory is served from a single fixed-size static buffer (`heap[HEAP_CAP]`).
+Two sorted arrays of `{start, size}` chunks track the heap's state:
 
-[ allocated .......... | free .................... ]
- 0                heap_size                    HEAP_CAPACITY
+- `freed_chunks` — currently free regions, starts pre-seeded with one
+  chunk covering the entire heap
+- `alloced_chunks` — currently allocated regions
 
-Every allocation's `{start, size}` is recorded in a separate metadata
-array (`heap_alloced`) so the allocator can later figure out which chunks
-are live — this bookkeeping is what a future garbage collector will scan.
+Both are instances of the same `Chunk_List` type, kept sorted by start
+address so that lookups (`chunk_list_find`) can binary search instead of
+scanning linearly.
+
+**Allocation (`heap_alloc`)** is first-fit: walk `freed_chunks`, take the
+first chunk big enough for the request, remove it from `freed_chunks`,
+and insert an entry of the requested size into `alloced_chunks`. If the
+chunk was larger than needed, the leftover tail is reinserted into
+`freed_chunks` as its own chunk (chunk splitting).
+
+**Freeing (`heap_free`)** looks up the pointer in `alloced_chunks` via
+binary search, removes it from there, and inserts it back into
+`freed_chunks` — making that region available for future allocations.
+
+This replaces the earlier bump allocator (`heap_size` boundary that only
+ever grew) — memory can now actually be reused after being freed.
 
 ## Current state
 
 | Function | Status |
 |---|---|
-| `heap_alloc` | Implemented — bump allocation, size-0 returns `NULL`, records metadata |
-| `heap_dump_alloced_chunks` | Implemented — debug print of all allocated chunks |
-| `heap_free` | Stub — not implemented yet |
-| `heap_collect` | Stub — not implemented yet |
+| `heap_alloc` | Implemented — first-fit search over freed list, with splitting |
+| `heap_free` | Implemented — returns chunk to freed list |
+| `chunk_list_insert` / `chunk_list_remove` / `chunk_list_find` | Implemented — sorted insert, removal, binary search |
+| `chunk_list_dump` | Implemented — debug print of a chunk list |
+| `heap_collect` | Stub — not implemented (`UNIMPLEMENTED` macro, aborts if called) |
 
-`heap_freed` / `heap_freed_size` exist as metadata scaffolding for the
-upcoming `heap_free` implementation, mirroring `heap_alloced`.
+## Design notes / known gaps
 
-## Design notes
-
-- `heap_alloc(0)` returns `NULL` rather than a zero-size chunk, mirroring
+- **No coalescing.** Adjacent freed chunks are never merged back into one
+  larger chunk, so repeated alloc/free of varying sizes will fragment
+  `freed_chunks` over time. This is the natural next thing to add.
+- `heap_alloc(0)` still returns `NULL` rather than a chunk, mirroring
   the C standard's allowance for `malloc(0)`.
-- No individual chunk can be freed yet — `heap_size` only grows. This is
-  intentional: the plan is to reclaim memory via `heap_collect`
-  (a conservative GC that scans the stack in pointer-sized windows for
-  addresses that fall inside the heap) rather than an explicit `free()`
-  that shifts memory around.
+- Freeing an already-freed or invalid pointer trips `assert(index >= 0)`
+  in `chunk_list_find` — there's no protection against double-free yet
+  beyond that assertion.
 - `HEAP_CAP` is set to 640,000 bytes (640 KB) for now — small on purpose,
   to make bugs and capacity limits easy to hit and observe.
+- The eventual GC (`heap_collect`) will scan the stack in pointer-sized
+  windows for addresses that fall inside `heap`, treating matches as
+  live roots — a conservative GC, no explicit root set required.
 
 ## Build & run
 ``` bash
@@ -52,6 +66,6 @@ gcc -o allocator main.c
 
 ## Roadmap
 
-- [ ] Implement `heap_free`
+- [ ] Coalesce adjacent freed chunks on `heap_free`
 - [ ] Implement `heap_collect` (mark via conservative stack scan + sweep)
-- [ ] Consider compaction / reuse of freed chunks
+- [ ] Guard against double-free more gracefully
