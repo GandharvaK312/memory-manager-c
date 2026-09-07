@@ -79,7 +79,6 @@ gcc -Wall -Wextra -std=c11 -pedantic -o heap main.c
 - [x] Bump allocator (superseded)
 - [x] Free-list allocator with first-fit + splitting
 - [x] Coalescing of adjacent freed chunks
-- [ ] Fix `chunk_start_compar` pointer-subtraction UB
 - [ ] Implement `heap_collect` — conservative GC via stack scanning
       (rolling pointer-sized window over the stack, checking whether
       each candidate address falls inside `heap[]` and is currently
