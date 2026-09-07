@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -40,7 +41,36 @@ Chunk_List freed_chunks = {
 }; // alternative for heap_freed
 /* [ allocated .......... | free .................... ]
 	0                heap_size                    HEAP_CAP */
+void chunk_list_insert(Chunk_List *list, void *start, size_t size){
+	assert(list -> count < CHUNK_LIST_CAP);
+	list -> chunks[list ->count].start = start;// for the particular chunk handled currently, start pointer of the chunk is assigned
+	list -> chunks[list ->count].size = size; // for the particular chunk handled currently, size of the chunk is assigned
 
+	for(size_t i = list -> count; i > 0 && list -> chunks[i].start < list -> chunks[i - 1].start; -- i){
+		const Chunk t = list -> chunks[i]; // getting sorted in ascending order from the last
+		list -> chunks[i] = list -> chunks[i - 1];
+		list -> chunks[i - 1] = t;
+	}
+	list -> count += 1;
+}
+
+void chunk_list_merge( Chunk_List *dst, const Chunk_List *src){
+	dst -> count = 0;
+	for(size_t i = 0; i < src -> count; ++ i){
+		const Chunk chunk = src -> chunks[i];
+		
+		if(dst -> count > 0){
+			Chunk *top_chunk = &dst -> chunks[dst -> count - 1];
+			if(top_chunk->start + top_chunk->size == chunk.start){
+				top_chunk->size += chunk.size;
+			} else {
+				chunk_list_insert(dst, chunk.start, chunk.size);
+			}
+		} else {
+			chunk_list_insert(dst, chunk.start, chunk.size);
+		}
+	}
+}
 
 void /*heap_dump_alloced_chunks*/chunk_list_dump(const Chunk_List *list){
 	// prints start address and size of the chunks in the heap of increasing sizes,
@@ -55,7 +85,9 @@ void /*heap_dump_alloced_chunks*/chunk_list_dump(const Chunk_List *list){
 int chunk_start_compar(const void *a, const void *b){
 	const Chunk *a_chunk = a;
 	const Chunk *b_chunk = b;
-	return a_chunk->start - b_chunk->start;
+	if (a_chunk->start < b_chunk->start) return -1;
+	if (a_chunk->start > b_chunk->start) return 1;
+	return 0;
 }
 
 int chunk_list_find(const Chunk_List *list, void *ptr){
@@ -67,22 +99,11 @@ int chunk_list_find(const Chunk_List *list, void *ptr){
 
 	if(result != 0) {
 		assert(list -> chunks <= result);
-		return (result - list -> chunks);
+		return (int) (result - list -> chunks);
 	} else return -1;
 }
 
-void chunk_list_insert(Chunk_List *list, void *start, size_t size){
-	assert(list -> count < CHUNK_LIST_CAP);
-	list -> chunks[list ->count].start = start;// for the particular chunk handled currently, start pointer of the chunk is assigned
-	list -> chunks[list ->count].size = size; // for the particular chunk handled currently, size of the chunk is assigned
 
-	for(size_t i = list -> count; i > 0 && list -> chunks[i].start < list -> chunks[i - 1].start; -- i){
-		const Chunk t = list -> chunks[i]; // getting sorted in ascending order from the last
-		list -> chunks[i] = list -> chunks[i - 1];
-		list -> chunks[i - 1] = t;
-	}
-	list -> count += 1;
-}
 
 void chunk_list_remove(Chunk_List *list, size_t index){
 	assert(index < list -> count);
@@ -92,10 +113,14 @@ void chunk_list_remove(Chunk_List *list, size_t index){
 	list -> count -= 1;
 }
 
+Chunk_List tmp_chunks = {0};
 // Only two main functions needed for memory allocation
 void *heap_alloc(size_t size){ // Allocates a memory in the heap
 
 	if(size > 0){
+		chunk_list_merge(&tmp_chunks, &freed_chunks); // basically merges all the free chunks so that they can be used generally
+		freed_chunks = tmp_chunks; // freed now has all the chunks to be used again, so at any case, freed chunks should dump
+		// only one memory size
 		for(size_t i = 0; i < freed_chunks.count; ++ i){
 			const Chunk chunk = freed_chunks.chunks[i];
 			if(chunk.size >= size){
@@ -140,6 +165,7 @@ void heap_free(void *ptr){ // Frees up the memory in the heap. will show undefin
 		const int index = chunk_list_find(&alloced_chunks, ptr);
 		// printf("%d\n", index);
 		assert(index >= 0);
+		assert(ptr == alloced_chunks.chunks[index].start);
 		chunk_list_insert(&freed_chunks, alloced_chunks.chunks[index].start, alloced_chunks.chunks[index].size);
 		chunk_list_remove(&alloced_chunks, (size_t) index);
 	}
@@ -153,19 +179,26 @@ void heap_collect(){
 	UNIMPLEMENTED;
 }
 
+# define N 10
+void *ptrs[N] = {0};
+
 int main(){
 
-	for(int i = 0; i < 10; ++ i){
-		void *p = heap_alloc(i);
-		if(i % 2 == 0){
-			heap_free(p);
-		}
+	for(int i = 0; i < N; ++ i){
+		ptrs[i] = heap_alloc(i);
 	}
-	heap_alloc(420);
-	for(int i = 1; i <= 4; i ++){
-		heap_alloc(i);
-	}
+
+	heap_alloc(10);
+	heap_alloc(20);
+	// for(int i = 0; i < N; i ++){
+	// 	if(i % 2 == 0){
+	// 		heap_free(ptrs[i]);
+	// 	}
+	// }
+	
+	printf("Alloced:\n");
 	chunk_list_dump(&alloced_chunks);
+	printf("Freed:\n");
 	chunk_list_dump(&freed_chunks);
 	return 0;
 }
