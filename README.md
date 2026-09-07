@@ -2,7 +2,9 @@
 
 A from-scratch memory allocator and garbage collector in C, built to
 understand how allocators and GCs actually work under the hood — no
-`malloc`/`free`, no external libraries.
+`malloc`/`free`.
+
+Started as a naive bump allocator before moving to free-list tracking
 
 Following tsoding's "Writing My Own Malloc in C" and "Writing a Garbage
 Collector in C" as the primary reference.
@@ -66,4 +68,20 @@ happening immediately on every free.
 - `HEAP_CAP` is 640,000 bytes (640 KB) — small on purpose, to make bugs
   and capacity limits easy to hit and observe.
 
-## Build & run [ ] Guard against double-free more gracefully
+## Build & run
+```bash
+gcc -Wall -Wextra -std=c11 -pedantic -o heap main.c
+./heap
+```
+
+## Roadmap
+
+- [x] Bump allocator (superseded)
+- [x] Free-list allocator with first-fit + splitting
+- [x] Coalescing of adjacent freed chunks
+- [ ] Fix `chunk_start_compar` pointer-subtraction UB
+- [ ] Implement `heap_collect` — conservative GC via stack scanning
+      (rolling pointer-sized window over the stack, checking whether
+      each candidate address falls inside `heap[]` and is currently
+      tracked in `alloced_chunks`)
+- [ ] Consider scanning static/global data as additional GC roots
