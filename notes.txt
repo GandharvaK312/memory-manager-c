@@ -1,0 +1,69 @@
+This file has been created so I can make my main.c file look clean and have all the comments(notes) here.
+
+the size of the HEAP: HEAP_CAP is 640000 which is 640 Kilo Bytes
+there are 2 main functions: heap_alloc and heap_free,
+rest all perform under the hood calculations/algorithms for both of these
+
+heap_alloc: allocates a chunk of memory in the heap
+heap_free: frees a chunk of memory from the heap
+
+ Chunk.start points to the start of a chunk in the heap
+ Chunk.size is the size of chunk so that it can get the last of the chunk
+
+heap[HEAP_CAP] is THE "heap" in this "code environment""
+
+Bump allocator:
+	size_t heap_size = 0; is the boundary between the allocated memory and the free memory in the HEAP commented to encourage memory manager to use the chunks which are now "free"
+	
+	Chunk heap_alloced[HEAP_ALLOCED_CAP] = {0}; holds the meta data of for the allocated memory from the heap
+	
+	size_t heap_alloced_size = 0; keeps track of the number of such chunks of the meta data "alloced"
+	
+	Chunk heap_freed[HEAP_FREED_CAP] = {0}; holds the meta data of for the free memory in the heap
+	
+	size_t heap_freed_size = 0; keeps track of the number of such chunks of the meta data "freed"
+
+this is a rep of bump allocator:
+[ allocated .......... | free .................... ]
+0                heap_size                    HEAP_CAP
+
+chunk list dump: 
+	prints start address and size of the chunks in the heap of increasing sizes
+
+	0 and 1 have same addresses because 0 is allocated to a chunk and 0 size is added to the heap allocated size and
+
+	so 1 uses the same address, so 0 does not return a unique pointer
+
+bump allocator:
+	assert(heap_size + size <= HEAP_CAP); // check if the size we want to allocate is under max capacity, if yes continue
+
+	void *ptr = heap + heap_size; // points to the location where there is the first free byte (heap + boundary)
+
+	heap_size += size; // moves the heap_size forward indicating "size" bytes are allocated
+
+	chunk_list_insert(&alloced_chunks, ptr, size);
+	does the same as what the below part does:
+	const Chunk chunk = { // meta data assignment
+		.start = ptr, // for the particular chunk handled currently, start pointer of the chunk is assigned
+		.size = size,  // for the particular chunk handled currently, size of the chunk is assigned
+	};
+	
+	assert(heap_alloced_size < HEAP_ALLOCED_CAP);
+	heap_alloced[heap_alloced_size++] = chunk; // the meta data for the current chunk is appended to the array of meta data(s)
+	
+	return ptr; // returns the location of where the current allocation just happened */
+
+// while a malloc on the other hand handles zero by returning NULL or a unique pointer that can be successfully passed to free
+
+"bump freer":
+	 // Frees up the memory in the heap. will show undefined behaviour if ptr points to NULL (if 0 is passed)
+	
+	// exactly why malloc passes a unique value more often than not so it doesnt have to check for "NULL"-ity
+	
+	// also the reason why double-free of a malloced pointer shows undefined behaviour
+
+free-list allocators:
+	chunk_list merge():  // basically merges all the free chunks so that they can be used generally
+
+	free_chunks = tmp_chunks:  // freed now has all the chunks to be used again, so at any case, freed chunks should dump only one memory size
+tail_size  // will never be negative cz of the >= condition so >= 0
