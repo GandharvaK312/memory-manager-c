@@ -67,3 +67,89 @@ free-list allocators:
 
 	free_chunks = tmp_chunks:  // freed now has all the chunks to be used again, so at any case, freed chunks should dump only one memory size
 tail_size  // will never be negative cz of the >= condition so >= 0
+
+Garbage Collector:
+
+struct {
+	char x; void* ptr;
+}
+
+total size should be 1 + 8 = 9, but it shows 16. what happens is:
+| _ _ _ _ _ _ _ _ | _ _ _ _ _ _ _ _ |
+| x - - - - - - - | ------ptr-------|
+x could take up any spot. the reason why the size is 16 is that if the compiler tries to allocate next to x, one part of it will be in the
+first 8 bytes and the other part will be in the second half. if the kernel (like most) reads memory in a segment of 8, then having ptr next
+to x
+is not good practice, so size is full taken up, it is called memory alignment. this 16 size works well until before ptr 8 places are occupied
+
+struct{
+	char x[9]; void *ptr;
+}
+
+| _ _ _ _ _ _ _ _ | _ _ _ _ _ _ _ _ | _ _ _ _ _ _ _ _ |
+| x 1 2 3 4 5 6 7 | 8 _ _ _ _ _ _ _ | ------ptr------ |
+this happens and size 24 is given for the structure
+
+So, to deal with this kind of memory, we ditch the "byte-driven"
+array of characters and use array of uintptr_t.
+This is "word-driven".
+
+so now all the meta data must be converted from "bytes" to "words"
+chunk_list_insert/remove/merge need not be changed, since they deal with void pointers.
+
+chunk_list_find must be passed with long unsigned, cz there the
+type is important
+
+heap_alloc only accepts size in bytes. so there is the problem
+
+[Gandharva@HPZbookGCK ~]$ cd Documents/memory-manager-c/
+[Gandharva@HPZbookGCK memory-manager-c]$ make -B && ./heap
+cc -Wall -Wextra -Werror -std=c11 -pedantic -ggdb -o heap main.c
+Alloced:
+Chunks (10):
+    start: 0x56533bd810a0, size: 1
+    start: 0x56533bd810a8, size: 1
+    start: 0x56533bd810b0, size: 1
+    start: 0x56533bd810b8, size: 1
+    start: 0x56533bd810c0, size: 1
+    start: 0x56533bd810c8, size: 1
+    start: 0x56533bd810d0, size: 1
+    start: 0x56533bd810d8, size: 1
+    start: 0x56533bd810e0, size: 2
+    start: 0x56533bd810f0, size: 2
+Freed:
+Chunks (1):
+    start: 0x56533bd81100, size: 5119988
+[Gandharva@HPZbookGCK memory-manager-c]$ hyprshot -m region
+
+this is the output.
+the size: 5119988 is in words and not in bytes
+
+the garbage collector basically scans the heap and checks if the pointers in the heap
+point to something in the heap, if yes, good, if not then they are deallocated
+
+GC (heap_collect) — done:
+
+mark_region scans a memory range one word (uintptr_t) at a time.
+Each word is treated as a *candidate* pointer — if its value falls
+inside any alloced_chunks entry, that chunk gets marked reachable,
+and mark_region recurses INTO that chunk (so a tree node only reachable
+through another heap object still gets found, not just direct stack
+pointers).
+
+starting point: stack, from current frame address (__builtin_frame_address(0))
+up to stack_base (captured once in main() before anything else runs)
+
+after marking: sweep — walk alloced_chunks, anything NOT marked
+reachable gets heap_free()'d
+
+this is "conservative" because it doesn't know which stack words are
+real pointers vs plain integers that just happen to look like valid
+heap addresses. it checks anyway and treats matches as pointers.
+false positives (keeping garbage alive) possible, false negatives
+(freeing live memory) should not be, assuming stack scanning is correct.
+
+test in main.c: build small binary tree via heap_alloc, keep root
+pointer alive -> heap_collect() should keep whole tree.
+set root = NULL -> heap_collect() should free entire tree, since
+nothing on the stack points into it anymore.
