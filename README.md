@@ -4,73 +4,113 @@ A from-scratch memory allocator and garbage collector in C, built to
 understand how allocators and GCs actually work under the hood — no
 `malloc`/`free`.
 
-Started as a naive bump allocator before moving to free-list tracking
+Started as a naive bump allocator before moving to free-list tracking,
+then a word-based heap with a conservative mark-and-sweep collector.
 
 Following tsoding's "Writing My Own Malloc in C" and "Writing a Garbage
 Collector in C" as the primary reference.
 
+## References
+
+- [Memory Allocator](https://www.youtube.com/watch?v=sZ8GJ1TiMdk&pp=ygUWbWVtb3J5IGFsbG9jYXRpb24gaW4gYw%3D%3D)
+- [Garbage Collector](https://www.youtube.com/watch?v=2JgEKEd3tw8&t=3140s)
+- [Github Repo for Tsoding's memory manager](https://github.com/tsoding/memalloc)
+- [Jim File](https://github.com/tsoding/jim)
+
+## Files
+
+- `heap.h` / `heap.c` — the allocator and GC: `heap_alloc`, `heap_free`,
+  `heap_collect`, and the `Chunk_List` bookkeeping underneath them
+- `main.c` — usage/demo code: builds a small binary tree via `heap_alloc`
+  and exercises `heap_collect` to show reachable vs. unreachable chunks
+  being kept or swept
+- `notes.txt` — running dev notes (struct alignment, free-list mechanics,
+  sample output) kept separate to keep `main.c` readable
+
 ## How it works
 
-Memory is served from a single fixed-size static buffer (`heap[HEAP_CAP]`).
-Two sorted arrays of `{start, size}` chunks track the heap's state:
+### Allocation
+
+Memory is served from a single fixed-size static buffer, `heap[HEAP_CAP_WORDS]`,
+declared as `uintptr_t[]` rather than `char[]` — this keeps every allocation
+naturally pointer-aligned, avoiding the padding trap where a byte-addressed
+heap can hand back a misaligned address for a struct containing a pointer
+(see `notes.txt` for the worked example: `{char x; void *ptr;}` needs 16
+bytes, not 9, due to alignment).
+
+Two sorted arrays of `{start, size}` chunks (in **words**, not bytes) track
+the heap's state:
 
 - `freed_chunks` — currently free regions, starts pre-seeded with one
   chunk covering the entire heap
 - `alloced_chunks` — currently allocated regions
 
-Both are instances of the same `Chunk_List` type, kept sorted by start
-address, which enables binary search (`chunk_list_find`) and, critically,
-makes **coalescing** possible: adjacent free chunks can only be detected
-and merged if the list is in address order.
+Both are instances of `Chunk_List`, kept sorted by start address, enabling
+binary search (`chunk_list_find`) and coalescing of adjacent free chunks.
 
-**Allocation (`heap_alloc`)**:
-1. Coalesce all of `freed_chunks` via `chunk_list_merge` — any two chunks
-   where one's end address equals the next one's start are merged into a
-   single larger chunk, undoing fragmentation from prior frees.
-2. First-fit search over the (now defragmented) `freed_chunks`.
-3. Remove the chosen chunk, insert a same-sized entry into `alloced_chunks`.
-4. If the chunk was larger than requested, reinsert the leftover tail
-   into `freed_chunks` (splitting).
+**`heap_alloc(size_bytes)`**:
+1. Rounds `size_bytes` up to `size_words`.
+2. Coalesces all of `freed_chunks` via `chunk_list_merge`.
+3. First-fit search over the defragmented `freed_chunks`.
+4. Splits the chunk if it's larger than needed, returning the leftover
+   tail to `freed_chunks`.
 
-**Freeing (`heap_free`)** looks up the pointer in `alloced_chunks` via
-binary search, removes it, and inserts it back into `freed_chunks` —
-coalescing is deferred until the next `heap_alloc` call rather than
-happening immediately on every free.
+**`heap_free(ptr)`** looks up `ptr` in `alloced_chunks` via binary search,
+removes it, and inserts it back into `freed_chunks`.
 
-## Current state — malloc/free: complete
+### Garbage collection
+
+**`heap_collect()`** is a conservative mark-and-sweep collector:
+
+1. **Mark** — `mark_region` scans a range of memory (starting from the
+   stack, between the current frame address and `stack_base`) one word
+   at a time. Each word is treated as a *candidate* pointer: if its value
+   falls inside any chunk in `alloced_chunks`, that chunk is marked
+   reachable, and `mark_region` recurses into the chunk itself — so
+   objects reachable only through another heap object (like tree
+   children) are still found.
+2. **Sweep** — any chunk in `alloced_chunks` that was never marked
+   reachable is freed via `heap_free`.
+
+This is "conservative" because it doesn't know which stack words are
+real pointers vs. plain integers that happen to look like valid
+addresses — it just checks whether the value *could* be a pointer into
+the heap and treats it as one if so.
+
+## Current state: complete
 
 | Function | Status |
 |---|---|
-| `heap_alloc` | Implemented — first-fit + coalescing + splitting |
-| `heap_free` | Implemented — returns chunk to freed list |
-| `chunk_list_merge` | Implemented — coalesces adjacent freed chunks |
-| `chunk_list_insert` / `chunk_list_remove` / `chunk_list_find` | Implemented — sorted insert, removal, binary search |
-| `chunk_list_dump` | Implemented — debug print of a chunk list |
-| `heap_collect` (GC) | **Not started** — next milestone (`UNIMPLEMENTED`, aborts if called) |
+| `heap_alloc` | Implemented — word-based, first-fit + coalescing + splitting |
+| `heap_free` | Implemented |
+| `heap_collect` | Implemented — conservative mark-and-sweep via stack scanning |
+| `chunk_list_merge` / `insert` / `remove` / `find` / `dump` | Implemented |
 
 ## Design notes / known gaps
 
-- **Coalescing happens on `heap_alloc`, not on `heap_free`.** Frees are
-  cheap (just move the chunk to `freed_chunks`); the merge cost is paid
-  lazily the next time memory is requested. This means `freed_chunks`
-  can transiently hold fragmented chunks between a `heap_free` call and
-  the next `heap_alloc` call — fine here since nothing reads `freed_chunks`
-  in between, but worth remembering if that assumption ever changes.
-- `chunk_start_compar` does raw pointer subtraction narrowed to `int`,
-  which is UB if the address difference doesn't fit in an `int`. Hasn't
-  caused a visible failure on this heap size, but should be replaced with
-  explicit `<`/`>` comparisons before depending on it further.
-- `heap_alloc(0)` returns `NULL`, mirroring the C standard's allowance
-  for `malloc(0)`.
-- Freeing an invalid/already-freed pointer trips `assert` in
-  `chunk_list_find`/`heap_free` rather than failing gracefully — acceptable
-  for a learning project, not for production use.
-- `HEAP_CAP` is 640,000 bytes (640 KB) — small on purpose, to make bugs
+- `chunk_start_compar` uses explicit `<`/`>` comparison (fixed from an
+  earlier version that subtracted pointers and narrowed to `int`, which
+  was UB for large address differences).
+- Coalescing happens lazily in `heap_alloc`, not immediately in `heap_free`.
+- `heap_alloc(0)` returns `NULL`, mirroring `malloc(0)`'s allowed behavior.
+- Freeing an invalid/already-freed pointer trips an `assert` rather than
+  failing gracefully — fine for a learning project, not production-grade.
+- `HEAP_CAP_BYTES` is 640,000 (640 KB) — small on purpose, to make bugs
   and capacity limits easy to hit and observe.
 
+## Limitations
+
+- GC roots are limited to the stack and the heap itself — no static/global
+  memory is scanned as a root source.
+- No support for packed structs; all pointer-containing data must stay
+  naturally aligned for the word-based heap and conservative scan to work.
+- No tricks that obscure pointers (e.g. XOR linked lists) — the collector
+  relies on being able to recognize a heap address directly in memory.
+
 ## Build & run
+
 ```bash
-gcc -Wall -Wextra -std=c11 -pedantic -o heap main.c
+gcc -Wall -Wextra -Werror -std=c11 -pedantic -ggdb -o heap main.c heap.c
 ./heap
 ```
 
@@ -79,8 +119,5 @@ gcc -Wall -Wextra -std=c11 -pedantic -o heap main.c
 - [x] Bump allocator (superseded)
 - [x] Free-list allocator with first-fit + splitting
 - [x] Coalescing of adjacent freed chunks
-- [ ] Implement `heap_collect` — conservative GC via stack scanning
-      (rolling pointer-sized window over the stack, checking whether
-      each candidate address falls inside `heap[]` and is currently
-      tracked in `alloced_chunks`)
-- [ ] Consider scanning static/global data as additional GC roots
+- [x] Word-based heap (alignment-safe)
+- [x] Conservative mark-and-sweep GC via stack scanning
